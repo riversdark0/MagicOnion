@@ -7,15 +7,18 @@ public class StaticStreamingHubClientGenerator
 {
     class StreamingHubClientBuildContext
     {
-        public StreamingHubClientBuildContext(MagicOnionStreamingHubInfo hub, StringBuilder writer)
+        public StreamingHubClientBuildContext(MagicOnionStreamingHubInfo hub, StringBuilder writer, bool enableStreamingHubDiagnosticHandler)
         {
             Hub = hub;
             Writer = writer;
+            EnableStreamingHubDiagnosticHandler = enableStreamingHubDiagnosticHandler;
         }
 
         public MagicOnionStreamingHubInfo Hub { get; }
 
         public StringBuilder Writer { get; }
+
+        public bool EnableStreamingHubDiagnosticHandler { get; }
     }
 
     public static string Build(GenerationContext generationContext, MagicOnionStreamingHubInfo hubInfo)
@@ -25,7 +28,7 @@ public class StaticStreamingHubClientGenerator
 
         EmitHeader(generationContext, writer);
 
-        var buildContext = new StreamingHubClientBuildContext(hubInfo, writer);
+        var buildContext = new StreamingHubClientBuildContext(hubInfo, writer, generationContext.Options.EnableStreamingHubDiagnosticHandler);
 
         EmitPreamble(generationContext, buildContext);
         EmitHubClientClass(generationContext, buildContext);
@@ -43,6 +46,7 @@ public class StaticStreamingHubClientGenerator
             #pragma warning disable CS0414 // The private field 'field' is assigned but its value is never used
             #pragma warning disable CS8019 // Unnecessary using directive.
             #pragma warning disable CS1522 // Empty switch block
+            #pragma warning disable CS1998 // This async method lacks 'await' operators and will run synchronously.
 
             """);
     }
@@ -79,6 +83,17 @@ public class StaticStreamingHubClientGenerator
         }
     }
 
+    static void EmitProperties(StreamingHubClientBuildContext ctx)
+    {
+        if (ctx.EnableStreamingHubDiagnosticHandler)
+        {
+            ctx.Writer.AppendLineWithFormat($"""
+                            readonly global::MagicOnion.Client.IStreamingHubDiagnosticHandler diagnosticHandler;
+            """);
+            ctx.Writer.AppendLine();
+        }
+    }
+
     static void EmitHubClientClass(GenerationContext generationContext, StreamingHubClientBuildContext ctx)
     {
         ctx.Writer.AppendLineWithFormat($$"""
@@ -88,28 +103,110 @@ public class StaticStreamingHubClientGenerator
             """);
         EmitProperties(ctx);
         EmitConstructor(ctx);
+        EmitHelperMethods(ctx);
         EmitHubMethods(ctx, isFireAndForget: false);
         EmitFireAndForget(ctx);
         EmitOnBroadcastEvent(ctx);
         EmitOnResponseEvent(ctx);
+        EmitOnClientResultEvent(ctx);
         ctx.Writer.AppendLine("""
                         }
             """);
         // }
     }
 
-    static void EmitProperties(StreamingHubClientBuildContext ctx)
+    static void EmitHelperMethods(StreamingHubClientBuildContext ctx)
     {
+        if (ctx.EnableStreamingHubDiagnosticHandler)
+        {
+            ctx.Writer.AppendLineWithFormat($$"""
+                            global::System.Threading.Tasks.Task<TResponse> WriteMessageWithResponseDiagnosticTaskAsync<TRequest, TResponse>(int methodId, TRequest message, [global::System.Runtime.CompilerServices.CallerMemberName] string callerMemberName = default!)
+                            {
+                                if (diagnosticHandler is null)
+                                {
+                                    return base.WriteMessageWithResponseTaskAsync<TRequest, TResponse>(methodId, message);
+                                }
+
+                                return diagnosticHandler.OnMethodInvoke(this, methodId, callerMemberName, message, isFireAndForget: true, base.WriteMessageWithResponseValueTaskOfTAsync<TRequest, TResponse>).AsTask();
+                            }
+
+                            async global::System.Threading.Tasks.ValueTask WriteMessageWithResponseDiagnosticValueTaskAsync<TRequest, TResponse>(int methodId, TRequest message, [global::System.Runtime.CompilerServices.CallerMemberName] string callerMemberName = default!)
+                            {
+                                if (diagnosticHandler is null)
+                                {
+                                    await base.WriteMessageWithResponseValueTaskAsync<TRequest, TResponse>(methodId, message);
+                                    return;
+                                }
+
+                                await diagnosticHandler.OnMethodInvoke(this, methodId, callerMemberName, message, isFireAndForget: true, base.WriteMessageWithResponseValueTaskOfTAsync<TRequest, TResponse>);
+                            }
+
+                            global::System.Threading.Tasks.ValueTask<TResponse> WriteMessageWithResponseDiagnosticValueTaskOfTAsync<TRequest, TResponse>(int methodId, TRequest message, [global::System.Runtime.CompilerServices.CallerMemberName] string callerMemberName = default!)
+                            {
+                                if (diagnosticHandler is null)
+                                {
+                                    return base.WriteMessageWithResponseValueTaskOfTAsync<TRequest, TResponse>(methodId, message);
+                                }
+
+                                return diagnosticHandler.OnMethodInvoke(this, methodId, callerMemberName, message, isFireAndForget: true, base.WriteMessageWithResponseValueTaskOfTAsync<TRequest, TResponse>);
+                            }
+
+                            global::System.Threading.Tasks.Task<TResponse> WriteMessageFireAndForgetDiagnosticTaskAsync<TRequest, TResponse>(int methodId, TRequest message, [global::System.Runtime.CompilerServices.CallerMemberName] string callerMemberName = default!)
+                            {
+                                if (diagnosticHandler is null)
+                                {
+                                    return base.WriteMessageFireAndForgetTaskAsync<TRequest, TResponse>(methodId, message);
+                                }
+
+                                return diagnosticHandler.OnMethodInvoke(this, methodId, callerMemberName, message, isFireAndForget: true, base.WriteMessageFireAndForgetValueTaskOfTAsync<TRequest, TResponse>).AsTask();
+                            }
+
+                            async global::System.Threading.Tasks.ValueTask WriteMessageFireAndForgetDiagnosticValueTaskAsync<TRequest, TResponse>(int methodId, TRequest message, [global::System.Runtime.CompilerServices.CallerMemberName] string callerMemberName = default!)
+                            {
+                                if (diagnosticHandler is null)
+                                {
+                                    await base.WriteMessageFireAndForgetTaskAsync<TRequest, TResponse>(methodId, message);
+                                    return;
+                                }
+
+                                await diagnosticHandler.OnMethodInvoke(this, methodId, callerMemberName, message, isFireAndForget: true, base.WriteMessageFireAndForgetValueTaskOfTAsync<TRequest, TResponse>);
+                            }
+
+                            global::System.Threading.Tasks.ValueTask<TResponse> WriteMessageFireAndForgetDiagnosticValueTaskOfTAsync<TRequest, TResponse>(int methodId, TRequest message, [global::System.Runtime.CompilerServices.CallerMemberName] string callerMemberName = default!)
+                            {
+                                if (diagnosticHandler is null)
+                                {
+                                    return base.WriteMessageFireAndForgetValueTaskOfTAsync<TRequest, TResponse>(methodId, message);
+                                }
+                            
+                                return diagnosticHandler.OnMethodInvoke(this, methodId, callerMemberName, message, isFireAndForget: true, base.WriteMessageFireAndForgetValueTaskOfTAsync<TRequest, TResponse>);
+                            }
+            """);
+            ctx.Writer.AppendLine();
+        }
     }
-    
+
     static void EmitConstructor(StreamingHubClientBuildContext ctx)
     {
-        ctx.Writer.AppendLineWithFormat($$"""
-                            public {{ctx.Hub.GetClientFullName()}}(global::Grpc.Core.CallInvoker callInvoker, global::System.String host, global::Grpc.Core.CallOptions options, global::MagicOnion.Serialization.IMagicOnionSerializerProvider serializerProvider, global::MagicOnion.Client.IMagicOnionClientLogger logger)
-                                : base("{{ctx.Hub.ServiceType.Name}}", callInvoker, host, options, serializerProvider, logger)
+        if (ctx.EnableStreamingHubDiagnosticHandler)
+        {
+            ctx.Writer.AppendLineWithFormat($$"""
+                            public {{ctx.Hub.GetClientFullName()}}({{ctx.Hub.Receiver.ReceiverType.FullName}} receiver, global::Grpc.Core.CallInvoker callInvoker, global::MagicOnion.Client.StreamingHubClientOptions options, global::MagicOnion.Client.IStreamingHubDiagnosticHandler diagnosticHandler)
+                                : base("{{ctx.Hub.ServiceType.Name}}", receiver, callInvoker, options)
+                            {
+                                this.diagnosticHandler = diagnosticHandler;
+                            }
+            """);
+        }
+        else
+        {
+            ctx.Writer.AppendLineWithFormat($$"""
+                            public {{ctx.Hub.GetClientFullName()}}({{ctx.Hub.Receiver.ReceiverType.FullName}} receiver, global::Grpc.Core.CallInvoker callInvoker, global::MagicOnion.Client.StreamingHubClientOptions options)
+                                : base("{{ctx.Hub.ServiceType.Name}}", receiver, callInvoker, options)
                             {
                             }
             """);
+        }
         ctx.Writer.AppendLine();
     }
 
@@ -118,7 +215,7 @@ public class StaticStreamingHubClientGenerator
         ctx.Writer.AppendLineWithFormat($$"""
                             public {{ctx.Hub.ServiceType.FullName}} FireAndForget()
                                 => new FireAndForgetClient(this);
-                                
+
                             [global::MagicOnion.Ignore]
                             class FireAndForgetClient : {{ctx.Hub.ServiceType.FullName}}
                             {
@@ -160,10 +257,19 @@ public class StaticStreamingHubClientGenerator
                 // new DynamicArgumentTuple(arg1, arg2, ...)
                 _ => $", {method.Parameters.ToNewDynamicArgumentTuple()}",
             };
+            var isReturnTypeVoid = method.MethodReturnType == MagicOnionTypeInfo.KnownTypes.System_Void;
+            var writeMessageTarget = isFireAndForget ? "parent" : "this";
+            var writeMessageAsyncPrefix = ctx.EnableStreamingHubDiagnosticHandler
+                ? isFireAndForget || isReturnTypeVoid
+                    ? $"{writeMessageTarget}.WriteMessageFireAndForgetDiagnostic"
+                    : $"{writeMessageTarget}.WriteMessageWithResponseDiagnostic"
+                : isFireAndForget || isReturnTypeVoid
+                    ? $"{writeMessageTarget}.WriteMessageFireAndForget"
+                    : $"{writeMessageTarget}.WriteMessageWithResponse";
 
             if (isFireAndForget) ctx.Writer.Append("    ");
             ctx.Writer.AppendLineWithFormat($"""
-                            public {method.MethodReturnType.FullName} {method.MethodName}({method.Parameters.ToMethodSignaturize()})
+                            public {(isReturnTypeVoid ? "void" : method.MethodReturnType.FullName)} {method.MethodName}({method.Parameters.ToMethodSignaturize()})
             """);
 
             if (isFireAndForget) ctx.Writer.Append("    ");
@@ -171,21 +277,28 @@ public class StaticStreamingHubClientGenerator
             {
                 // ValueTask
                 ctx.Writer.AppendLineWithFormat($"""
-                                => new global::System.Threading.Tasks.ValueTask({(isFireAndForget ? "parent.WriteMessageFireAndForgetAsync" : "base.WriteMessageWithResponseAsync")}<{method.RequestType.FullName}, {method.ResponseType.FullName}>({method.HubId}{writeMessageParameters}));
+                                => {writeMessageAsyncPrefix}ValueTaskAsync<{method.RequestType.FullName}, {method.ResponseType.FullName}>({method.HubId}{writeMessageParameters});
+            """);
+            }
+            else if (isReturnTypeVoid)
+            {
+                // void
+                ctx.Writer.AppendLineWithFormat($"""
+                                => _ = {writeMessageAsyncPrefix}ValueTaskAsync<{method.RequestType.FullName}, {method.ResponseType.FullName}>({method.HubId}{writeMessageParameters});
             """);
             }
             else if (method.MethodReturnType.HasGenericArguments && method.MethodReturnType.GetGenericTypeDefinition() == MagicOnionTypeInfo.KnownTypes.System_Threading_Tasks_ValueTask)
             {
                 // ValueTask<T>
                 ctx.Writer.AppendLineWithFormat($"""
-                                => new global::System.Threading.Tasks.ValueTask<{method.ResponseType.FullName}>({(isFireAndForget ? "parent.WriteMessageFireAndForgetAsync" : "base.WriteMessageWithResponseAsync")}<{method.RequestType.FullName}, {method.ResponseType.FullName}>({method.HubId}{writeMessageParameters}));
+                                => {writeMessageAsyncPrefix}ValueTaskOfTAsync<{method.RequestType.FullName}, {method.ResponseType.FullName}>({method.HubId}{writeMessageParameters});
             """);
             }
             else
             {
                 // Task, Task<T>
                 ctx.Writer.AppendLineWithFormat($"""
-                                => {(isFireAndForget ? "parent.WriteMessageFireAndForgetAsync" : "base.WriteMessageWithResponseAsync")}<{method.RequestType.FullName}, {method.ResponseType.FullName}>({method.HubId}{writeMessageParameters});
+                                => {writeMessageAsyncPrefix}TaskAsync<{method.RequestType.FullName}, {method.ResponseType.FullName}>({method.HubId}{writeMessageParameters});
             """);
             }
         }
@@ -196,12 +309,20 @@ public class StaticStreamingHubClientGenerator
     static void EmitOnBroadcastEvent(StreamingHubClientBuildContext ctx)
     {
         ctx.Writer.AppendLine("""
-                            protected override void OnBroadcastEvent(global::System.Int32 methodId, global::System.ArraySegment<global::System.Byte> data)
+                            protected override void OnBroadcastEvent(global::System.Int32 methodId, global::System.ReadOnlyMemory<global::System.Byte> data)
                             {
+            """);
+        if (ctx.EnableStreamingHubDiagnosticHandler)
+        {
+            ctx.Writer.AppendLine("""
+                                diagnosticHandler?.OnBroadcastEventRaw(this, methodId, data);
+            """);
+        }
+        ctx.Writer.AppendLine("""
                                 switch (methodId)
                                 {
             """);
-        foreach (var method in ctx.Hub.Receiver.Methods)
+        foreach (var method in ctx.Hub.Receiver.Methods.Where(x => x.MethodReturnType == MagicOnionTypeInfo.KnownTypes.System_Void))
         {
             var methodArgs = method.Parameters.Count switch
             {
@@ -213,8 +334,29 @@ public class StaticStreamingHubClientGenerator
             ctx.Writer.AppendLineWithFormat($$"""
                                     case {{method.HubId}}: // {{method.MethodReturnType.ToDisplayName()}} {{method.MethodName}}({{method.Parameters.ToMethodSignaturize()}})
                                         {
+            """);
+
+            if (ctx.EnableStreamingHubDiagnosticHandler)
+            {
+                ctx.Writer.AppendLineWithFormat($$"""
                                             var value = base.Deserialize<{{method.RequestType.FullName}}>(data);
+                                            diagnosticHandler?.OnBroadcastEvent(this, "{{method.MethodName}}", value);
                                             receiver.{{method.MethodName}}({{methodArgs}});
+            """);
+            }
+            else
+            {
+                if (method.Parameters.Count != 0)
+                {
+                    ctx.Writer.AppendLineWithFormat($$"""
+                                            var value = base.Deserialize<{{method.RequestType.FullName}}>(data);
+            """);
+                }
+                ctx.Writer.AppendLineWithFormat($$"""
+                                            receiver.{{method.MethodName}}({{methodArgs}});
+            """);
+            }
+            ctx.Writer.AppendLine("""
                                         }
                                         break;
             """);
@@ -229,20 +371,88 @@ public class StaticStreamingHubClientGenerator
     static void EmitOnResponseEvent(StreamingHubClientBuildContext ctx)
     {
         ctx.Writer.AppendLine("""
-                            protected override void OnResponseEvent(global::System.Int32 methodId, global::System.Object taskCompletionSource, global::System.ArraySegment<global::System.Byte> data)
+                            protected override void OnResponseEvent(global::System.Int32 methodId, global::System.Object taskSource, global::System.ReadOnlyMemory<global::System.Byte> data)
                             {
                                 switch (methodId)
                                 {
             """);
         foreach (var method in ctx.Hub.Methods)
         {
-            ctx.Writer.AppendLineWithFormat($$"""
+            if (ctx.EnableStreamingHubDiagnosticHandler)
+            {
+                ctx.Writer.AppendLineWithFormat($$"""
                                     case {{method.HubId}}: // {{method.MethodReturnType.ToDisplayName()}} {{method.MethodName}}({{method.Parameters.ToMethodSignaturize()}})
-                                        base.SetResultForResponse<{{method.ResponseType.FullName}}>(taskCompletionSource, data);
+                                        diagnosticHandler?.OnResponseEvent<{{ctx.Hub.GetClientFullName()}}, {{method.ResponseType.FullName}}>(this, "{{method.MethodName}}", data);
+                                        base.SetResultForResponse<{{method.ResponseType.FullName}}>(taskSource, data);
                                         break;
+            """);
+            }
+            else
+            {
+                ctx.Writer.AppendLineWithFormat($$"""
+                                    case {{method.HubId}}: // {{method.MethodReturnType.ToDisplayName()}} {{method.MethodName}}({{method.Parameters.ToMethodSignaturize()}})
+                                        base.SetResultForResponse<{{method.ResponseType.FullName}}>(taskSource, data);
+                                        break;
+            """);
+
+            }
+        }
+        ctx.Writer.AppendLine("""
+                                }
+                            }
+
+            """);
+    }
+
+    static void EmitOnClientResultEvent(StreamingHubClientBuildContext ctx)
+    {
+        var clientResultMethods = ctx.Hub.Receiver.Methods.Where(x => x.IsClientResult).ToArray();
+        if (clientResultMethods.Length == 0)
+        {
+            ctx.Writer.AppendLine("""
+                            protected override void OnClientResultEvent(global::System.Int32 methodId, global::System.Guid messageId, global::System.ReadOnlyMemory<global::System.Byte> data)
+                            {
+                            }
+            """);
+            return;
+        }
+
+        ctx.Writer.AppendLine("""
+                            protected override void OnClientResultEvent(global::System.Int32 methodId, global::System.Guid messageId, global::System.ReadOnlyMemory<global::System.Byte> data)
+                            {
+                                try
+                                {
+                                    switch (methodId)
+                                    {
+            """);
+        foreach (var method in clientResultMethods)
+        {
+            var methodParameters = method.Parameters
+                .Select((x, i) => (Index: i, IsCancellationToken: x.Type == MagicOnionTypeInfo.KnownTypes.System_Threading_CancellationToken, Type: x.Type))
+                .ToArray();
+
+            var methodArgs = methodParameters.Count(x => !x.IsCancellationToken) switch
+            {
+                0 => string.Join(", ", methodParameters.Select(x => "default")),
+                1 => string.Join(", ", methodParameters.Select(x => x.IsCancellationToken ? "default" : "value")),
+                _ => string.Join(", ", methodParameters.Select(x => x.IsCancellationToken ? "default" : $"value.Item{x.Index + 1}")),
+            };
+
+            ctx.Writer.AppendLineWithFormat($$"""
+                                        case {{method.HubId}}: // {{method.MethodReturnType.ToDisplayName()}} {{method.MethodName}}({{method.Parameters.ToMethodSignaturize()}})
+                                            {
+                                                var value = base.Deserialize<{{method.RequestType.FullName}}>(data);
+                                                base.AwaitAndWriteClientResultResponseMessage(methodId, messageId, receiver.{{method.MethodName}}({{methodArgs}}));
+                                            }
+                                            break;
             """);
         }
         ctx.Writer.AppendLine("""
+                                    }
+                                }
+                                catch (global::System.Exception ex)
+                                {
+                                    base.WriteClientResultResponseMessageForError(methodId, messageId, ex);
                                 }
                             }
 

@@ -1,4 +1,6 @@
 using MagicOnion.Client.DynamicClient;
+using Microsoft.Extensions.Time.Testing;
+using System.Buffers;
 
 namespace MagicOnion.Client.Tests;
 
@@ -303,7 +305,7 @@ public class StreamingHubTest
         Assert.Equal('X', requestBody.Item7);
         Assert.Equal(456, result);
     }
-    
+
     [Fact]
     public async Task ValueTask_Forget_NoReturnValue_Parameter_Zero()
     {
@@ -371,6 +373,179 @@ public class StreamingHubTest
         Assert.Equal(123, requestBody);
         Assert.Equal(default, result);
     }
+
+    [Fact]
+    public async Task Void_Parameter_Zero()
+    {
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var helper = new StreamingHubClientTestHelper<IGreeterHub, IGreeterHubReceiver>(factoryProvider: DynamicStreamingHubClientFactoryProvider.Instance);
+        var client = await helper.ConnectAsync(timeout.Token);
+
+        // Use Fire-and-forget client
+        client = client.FireAndForget();
+
+        // Invoke Hub Method
+        client.Void_Parameter_Zero();
+
+        // Read a hub method request payload
+        var (methodId, requestBody) = await helper.ReadFireAndForgetRequestAsync<Nil>();
+
+        Assert.Equal(Nil.Default, requestBody);
+    }
+
+    [Fact]
+    public async Task Void_Parameter_One()
+    {
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var helper = new StreamingHubClientTestHelper<IGreeterHub, IGreeterHubReceiver>(factoryProvider: DynamicStreamingHubClientFactoryProvider.Instance);
+        var client = await helper.ConnectAsync(timeout.Token);
+
+        // Use Fire-and-forget client
+        client = client.FireAndForget();
+
+        // Invoke Hub Method
+        client.Void_Parameter_One(123);
+
+        // Read a hub method request payload
+        var (methodId, requestBody) = await helper.ReadFireAndForgetRequestAsync<int>();
+
+        Assert.Equal(123, requestBody);
+    }
+
+    [Fact]
+    public async Task Void_Parameter_Many()
+    {
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var helper = new StreamingHubClientTestHelper<IGreeterHub, IGreeterHubReceiver>(factoryProvider: DynamicStreamingHubClientFactoryProvider.Instance);
+        var client = await helper.ConnectAsync(timeout.Token);
+
+        // Invoke Hub Method
+        client.Void_Parameter_Many(12345, "Hello", 0xfffffff1L, true, 128, 12.345, 'X');
+
+        // Read a hub method request payload
+        var (methodId, requestBody) = await helper.ReadFireAndForgetRequestAsync<DynamicArgumentTuple<int, string, long, bool, byte, double, char>>();
+
+        Assert.Equal(12345, requestBody.Item1);
+        Assert.Equal("Hello", requestBody.Item2);
+        Assert.Equal(0xfffffff1L, requestBody.Item3);
+        Assert.True(requestBody.Item4);
+        Assert.Equal(128, requestBody.Item5);
+        Assert.Equal(12.345, requestBody.Item6);
+        Assert.Equal('X', requestBody.Item7);
+    }
+
+    [Fact]
+    public async Task ClientHeartbeat_Interval()
+    {
+        // Arrange
+        var origin = new DateTimeOffset(2024, 7, 1, 0, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FakeTimeProvider(origin);
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var helper = new StreamingHubClientTestHelper<IGreeterHub, IGreeterHubReceiver>(factoryProvider: DynamicStreamingHubClientFactoryProvider.Instance);
+        var options = StreamingHubClientOptions.CreateWithDefault().WithClientHeartbeatInterval(TimeSpan.FromMilliseconds(100)).WithTimeProvider(timeProvider);
+        var client = await helper.ConnectAsync(options, timeout.Token);
+
+        // Act
+        var t = client.Parameter_One(1234);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(100));
+        await Task.Delay(100); // Wait for processing queue.
+        timeProvider.Advance(TimeSpan.FromMilliseconds(100));
+        await Task.Delay(100); // Wait for processing queue.
+        timeProvider.Advance(TimeSpan.FromMilliseconds(100));
+        await Task.Delay(100); // Wait for processing queue.
+
+        // Assert
+        var (messageId, methodId, requestBody) = await helper.ReadRequestAsync<int>();
+        Assert.Equal(1234, requestBody);
+
+        var request1 = await helper.ReadRequestRawAsync();
+        var request2 = await helper.ReadRequestRawAsync();
+        var request3 = await helper.ReadRequestRawAsync();
+        Assert.Equal((byte[])[0x94 /* Array(4) */, 0x7e /* 0x7e(127) */, 0x00 /* Sequence(0) */, .. ToMessagePackBytes(origin.AddMilliseconds(100)) /* ServerSentAt */, 0xc0 /* Nil */], request1.ToArray());
+        Assert.Equal((byte[])[0x94 /* Array(4) */, 0x7e /* 0x7e(127) */, 0x01 /* Sequence(1) */, .. ToMessagePackBytes(origin.AddMilliseconds(200)) /* ServerSentAt */, 0xc0 /* Nil */], request2.ToArray());
+        Assert.Equal((byte[])[0x94 /* Array(4) */, 0x7e /* 0x7e(127) */, 0x02 /* Sequence(2) */, .. ToMessagePackBytes(origin.AddMilliseconds(300)) /* ServerSentAt */, 0xc0 /* Nil */], request3.ToArray());
+
+        static byte[] ToMessagePackBytes(DateTimeOffset dt)
+        {
+            var ms = dt.ToUnixTimeMilliseconds();
+
+            var arrayBufferWriter = new ArrayBufferWriter<byte>();
+            var writer = new MessagePackWriter(arrayBufferWriter);
+            writer.Write(ms);
+            writer.Flush();
+            return arrayBufferWriter.WrittenMemory.ToArray();
+        }
+    }
+
+    [Fact]
+    public async Task ServerHeartbeat_Respond()
+    {
+        // Arrange
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var helper = new StreamingHubClientTestHelper<IGreeterHub, IGreeterHubReceiver>(factoryProvider: DynamicStreamingHubClientFactoryProvider.Instance);
+        var options = StreamingHubClientOptions.CreateWithDefault().WithClientHeartbeatInterval(Timeout.InfiniteTimeSpan); // Disable Client Heartbeat timer.
+        var client = await helper.ConnectAsync(options, timeout.Token);
+
+        // Act
+        var t = client.Parameter_One(1234);
+        helper.WriteResponseRaw([0x95 /* Array(5) */, 0x7f /* Type:127 */, 0x00 /* Sequence(0) */, .. (byte[])[0xcd, 0x30, 0x39] /* ServerSentAt */, 0xc0 /* Nil */, 0xc0 /* Extra */]); // Simulate heartbeat from the server.
+        await Task.Delay(100);
+
+        // Assert
+        var (messageId, methodId, requestBody) = await helper.ReadRequestAsync<int>();
+        Assert.Equal(1234, requestBody);
+
+        var request1 = await helper.ReadRequestRawAsync();
+        Assert.Equal((byte[])[0x94, 0x7f, 0x00 /* Sequence(0) */, .. (byte[])[0xcd, 0x30, 0x39] /* ServerSentAt */, 0xc0 /* Nil */], request1.ToArray()); // Respond to the heartbeat from the server.
+    }
+
+    [Fact]
+    public async Task ServerHeartbeat_ServerTime()
+    {
+        // Arrange
+        var received = default(DateTimeOffset);
+        var timeProvider = new FakeTimeProvider();
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var helper = new StreamingHubClientTestHelper<IGreeterHub, IGreeterHubReceiver>(factoryProvider: DynamicStreamingHubClientFactoryProvider.Instance);
+        var options = StreamingHubClientOptions.CreateWithDefault()
+            .WithTimeProvider(timeProvider)
+            .WithServerHeartbeatReceived(x => received = x.ServerTime)
+            .WithClientHeartbeatInterval(Timeout.InfiniteTimeSpan); // Disable Heartbeat timer.
+        var client = await helper.ConnectAsync(options, timeout.Token);
+
+        // Act
+        helper.WriteResponseRaw((byte[])[0x95 /* Array(5) */, 0x7f /* Type:127 */, 0x00 /* Sequence(0) */, .. (byte[])[0xcf, 0x00, 0x00, 0x01, 0x90, 0x6b, 0x97, 0x5c, 0x00] /* ServerSentAt */, 0xc0 /* Nil */, 0xc0 /* Extra(Nil) */]); // Simulate heartbeat from the server.
+        await Task.Delay(100);
+
+        // Assert
+        var request1 = await helper.ReadRequestRawAsync();
+        Assert.Equal(new DateTimeOffset(2024, 7, 1, 0, 0, 0, 0, TimeSpan.Zero), received);
+        Assert.Equal((byte[])[0x94 /* Array(4) */, 0x7f /* Type:127 */, 0x00 /* Sequence(0) */, .. (byte[])[0xcf, 0x00, 0x00, 0x01, 0x90, 0x6b, 0x97, 0x5c, 0x00] /* ServerSentAt */, 0xc0 /* Nil */], request1.ToArray()); // Respond to the heartbeat from the server.
+    }
+
+    [Fact]
+    public async Task ServerHeartbeat_Extra()
+    {
+        // Arrange
+        var received = Array.Empty<byte>();
+        var timeProvider = new FakeTimeProvider();
+        var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var helper = new StreamingHubClientTestHelper<IGreeterHub, IGreeterHubReceiver>(factoryProvider: DynamicStreamingHubClientFactoryProvider.Instance);
+        var options = StreamingHubClientOptions.CreateWithDefault()
+            .WithTimeProvider(timeProvider)
+            .WithServerHeartbeatReceived(x => received = x.Metadata.ToArray())
+            .WithClientHeartbeatInterval(Timeout.InfiniteTimeSpan); // Disable Heartbeat timer.
+        var client = await helper.ConnectAsync(options, timeout.Token);
+
+        // Act
+        helper.WriteResponseRaw((byte[])[0x95 /* Array(5) */, 0x7f /* Type:127 */, 0x00 /* Sequence(0) */, .. (byte[])[ 0xcd, 0x30, 0x39 ] /* ServerSentAt */, 0xc0 /* Nil */, .."Hello World"u8 /* Extra */]); // Simulate heartbeat from the server.
+        await Task.Delay(100);
+
+        // Assert
+        Assert.Equal([.. "Hello World"u8], received); // Respond to the heartbeat from the server.
+        var request1 = await helper.ReadRequestRawAsync();
+        Assert.Equal((byte[])[0x94 /* Array(4) */, 0x7f /* Type:127 */, 0x00 /* Sequence(0) */, .. (byte[])[0xcd, 0x30, 0x39] /* ServerSentAt */, 0xc0 /* Nil */], request1.ToArray()); // Respond to the heartbeat from the server.
+    }
 }
 
 public interface IGreeterHubReceiver
@@ -387,4 +562,7 @@ public interface IGreeterHub : IStreamingHub<IGreeterHub, IGreeterHubReceiver>
     ValueTask<int> ValueTask_Parameter_One(int arg0);
     ValueTask<int> ValueTask_Parameter_Two(int arg0, string arg1);
     ValueTask<int> ValueTask_Parameter_Many(int arg0, string arg1, long arg2, bool arg3, byte arg4, double arg5, char arg6);
+    void Void_Parameter_Zero();
+    void Void_Parameter_One(int arg0);
+    void Void_Parameter_Many(int arg0, string arg1, long arg2, bool arg3, byte arg4, double arg5, char arg6);
 }

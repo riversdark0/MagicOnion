@@ -42,6 +42,7 @@ namespace Assets.Scripts
         public Button ExceptionButton;
         public Button UnaryExceptionButton;
 
+        public Text LabelRtt;
 
         async void Start()
         {
@@ -54,7 +55,7 @@ namespace Assets.Scripts
         {
             // Clean up Hub and channel
             shutdownCancellation.Cancel();
-            
+
             if (this.streamingClient != null) await this.streamingClient.DisposeAsync();
             if (this.channel != null) await this.channel.ShutdownAsync();
         }
@@ -64,14 +65,18 @@ namespace Assets.Scripts
         {
             // Initialize the Hub
             // NOTE: If you want to use SSL/TLS connection, see InitialSettings.OnRuntimeInitialize method.
-            this.channel = GrpcChannelx.ForAddress("http://localhost:5000");
+            this.channel = GrpcChannelx.ForAddress(SystemConstants.ServerUrl);
 
             while (!shutdownCancellation.IsCancellationRequested)
             {
                 try
                 {
                     Debug.Log($"Connecting to the server...");
-                    this.streamingClient = await StreamingHubClient.ConnectAsync<IChatHub, IChatHubReceiver>(this.channel, this, cancellationToken: shutdownCancellation.Token);
+                    var options = StreamingHubClientOptions.CreateWithDefault()
+                        .WithClientHeartbeatResponseReceived(x => LabelRtt.text = $"RTT: {x.RoundTripTime.TotalMilliseconds:#,0}ms")
+                        .WithClientHeartbeatInterval(TimeSpan.FromSeconds(10))
+                        .WithClientHeartbeatTimeout(TimeSpan.FromSeconds(5));
+                    this.streamingClient = await StreamingHubClient.ConnectAsync<IChatHub, IChatHubReceiver>(this.channel, this, options, cancellationToken: shutdownCancellation.Token);
                     this.RegisterDisconnectEvent(streamingClient);
                     Debug.Log($"Connection is established.");
                     break;
@@ -258,6 +263,12 @@ namespace Assets.Scripts
         {
             this.ChatText.text += $"\n{message.UserName}：{message.Message}";
         }
+
+        Task<string> IChatHubReceiver.HelloAsync(string name, int age)
+        {
+            return Task.FromResult($"Hello {name} ({age}) from Client");
+        }
+
         #endregion
 
 

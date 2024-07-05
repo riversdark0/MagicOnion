@@ -27,7 +27,7 @@ public class HandCraftedStreamingHubClientTest : IClassFixture<MagicOnionApplica
         var client = new __HandCraftedClient__IHandCraftedStreamingHubClientTestHub(receiver, channel.CreateCallInvoker(), string.Empty, new CallOptions(), MagicOnionSerializerProvider.Default, NullMagicOnionClientLogger.Instance);
 
         // Act
-        await client.ConnectAsync(receiver);
+        await client.ConnectAsync();
         var retVal = await client.MethodParameterless();
 
         // Assert
@@ -43,7 +43,7 @@ public class HandCraftedStreamingHubClientTest : IClassFixture<MagicOnionApplica
         var client = new __HandCraftedClient__IHandCraftedStreamingHubClientTestHub(receiver, channel.CreateCallInvoker(), string.Empty, new CallOptions(), MagicOnionSerializerProvider.Default, NullMagicOnionClientLogger.Instance);
 
         // Act
-        await client.ConnectAsync(receiver);
+        await client.ConnectAsync();
         var retVal = await client.Callback(1234, "FooBarBaz");
         await Task.Delay(500); // Wait for the broadcast queue to be consumed.
 
@@ -64,16 +64,16 @@ public class HandCraftedStreamingHubClientTest : IClassFixture<MagicOnionApplica
     class __HandCraftedClient__IHandCraftedStreamingHubClientTestHub : StreamingHubClientBase<IHandCraftedStreamingHubClientTestHub, IHandCraftedStreamingHubClientTestHubReceiver>, IHandCraftedStreamingHubClientTestHub
     {
         public __HandCraftedClient__IHandCraftedStreamingHubClientTestHub(IHandCraftedStreamingHubClientTestHubReceiver receiver, CallInvoker callInvoker, string host, CallOptions option, IMagicOnionSerializerProvider messageSerializer, IMagicOnionClientLogger logger)
-            : base(nameof(IHandCraftedStreamingHubClientTestHub), callInvoker, host, option, messageSerializer, logger)
+            : base(nameof(IHandCraftedStreamingHubClientTestHub), receiver, callInvoker, new StreamingHubClientOptions(host, option, messageSerializer, logger))
         {
         }
 
-        public Task ConnectAsync(IHandCraftedStreamingHubClientTestHubReceiver receiver)
+        public Task ConnectAsync()
         {
-            return __ConnectAndSubscribeAsync(receiver, CancellationToken.None);
+            return __ConnectAndSubscribeAsync(CancellationToken.None);
         }
 
-        protected override void OnResponseEvent(int methodId, object taskCompletionSource, ArraySegment<byte> data)
+        protected override void OnResponseEvent(int methodId, object taskCompletionSource, ReadOnlyMemory<byte> data)
         {
             if (FNV1A32.GetHashCode(nameof(MethodParameterless)) == methodId)
             {
@@ -85,13 +85,18 @@ public class HandCraftedStreamingHubClientTest : IClassFixture<MagicOnionApplica
             }
         }
 
-        protected override void OnBroadcastEvent(int methodId, ArraySegment<byte> data)
+        protected override void OnBroadcastEvent(int methodId, ReadOnlyMemory<byte> data)
         {
             if (FNV1A32.GetHashCode(nameof(IHandCraftedStreamingHubClientTestHubReceiver.OnMessage)) == methodId)
             {
                 var value = base.Deserialize<DynamicArgumentTuple<int, string>>(data);
                 receiver.OnMessage(value.Item1, value.Item2);
             }
+        }
+
+        protected override void OnClientResultEvent(int methodId, Guid messageId, ReadOnlyMemory<byte> data)
+        {
+            throw new NotImplementedException();
         }
 
         public IHandCraftedStreamingHubClientTestHub FireAndForget()
@@ -113,53 +118,53 @@ public class HandCraftedStreamingHubClientTest : IClassFixture<MagicOnionApplica
 
             public Task MethodReturnWithoutValue()
             {
-                return parent.WriteMessageFireAndForgetAsync<MessagePack.Nil, MessagePack.Nil>(FNV1A32.GetHashCode(nameof(MethodReturnWithoutValue)), MessagePack.Nil.Default);
+                return parent.WriteMessageFireAndForgetTaskAsync<MessagePack.Nil, MessagePack.Nil>(FNV1A32.GetHashCode(nameof(MethodReturnWithoutValue)), MessagePack.Nil.Default);
             }
 
             public Task<int> MethodParameterless()
             {
-                return parent.WriteMessageFireAndForgetAsync<MessagePack.Nil, int>(FNV1A32.GetHashCode(nameof(MethodParameterless)), MessagePack.Nil.Default);
+                return parent.WriteMessageFireAndForgetTaskAsync<MessagePack.Nil, int>(FNV1A32.GetHashCode(nameof(MethodParameterless)), MessagePack.Nil.Default);
             }
 
             public Task<int> MethodParameter_One(int arg0)
             {
-                return parent.WriteMessageFireAndForgetAsync<int, int>(FNV1A32.GetHashCode(nameof(MethodParameter_One)), arg0);
+                return parent.WriteMessageFireAndForgetTaskAsync<int, int>(FNV1A32.GetHashCode(nameof(MethodParameter_One)), arg0);
             }
 
             public Task<int> MethodParameter_Many(int arg0, string arg1)
             {
-                return parent.WriteMessageFireAndForgetAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(MethodParameter_Many)), new DynamicArgumentTuple<int, string>(arg0, arg1));
+                return parent.WriteMessageFireAndForgetTaskAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(MethodParameter_Many)), new DynamicArgumentTuple<int, string>(arg0, arg1));
             }
 
             public Task<int> Callback(int arg0, string arg1)
             {
-                return parent.WriteMessageFireAndForgetAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(Callback)), new DynamicArgumentTuple<int, string>(arg0, arg1));
+                return parent.WriteMessageFireAndForgetTaskAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(Callback)), new DynamicArgumentTuple<int, string>(arg0, arg1));
             }
         }
 
         public Task MethodReturnWithoutValue()
         {
-            return base.WriteMessageWithResponseAsync<MessagePack.Nil, MessagePack.Nil>(FNV1A32.GetHashCode(nameof(MethodReturnWithoutValue)), MessagePack.Nil.Default);
+            return base.WriteMessageWithResponseTaskAsync<MessagePack.Nil, MessagePack.Nil>(FNV1A32.GetHashCode(nameof(MethodReturnWithoutValue)), MessagePack.Nil.Default);
         }
 
         public Task<int> MethodParameterless()
         {
-            return WriteMessageWithResponseAsync<MessagePack.Nil, int>(FNV1A32.GetHashCode(nameof(MethodParameterless)), MessagePack.Nil.Default);
+            return WriteMessageWithResponseTaskAsync<MessagePack.Nil, int>(FNV1A32.GetHashCode(nameof(MethodParameterless)), MessagePack.Nil.Default);
         }
 
         public Task<int> MethodParameter_One(int arg0)
         {
-            return WriteMessageWithResponseAsync<int, int>(FNV1A32.GetHashCode(nameof(MethodParameter_One)), arg0);
+            return WriteMessageWithResponseTaskAsync<int, int>(FNV1A32.GetHashCode(nameof(MethodParameter_One)), arg0);
         }
 
         public Task<int> MethodParameter_Many(int arg0, string arg1)
         {
-            return WriteMessageWithResponseAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(MethodParameter_Many)), new DynamicArgumentTuple<int, string>(arg0, arg1));
+            return WriteMessageWithResponseTaskAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(MethodParameter_Many)), new DynamicArgumentTuple<int, string>(arg0, arg1));
         }
 
         public Task<int> Callback(int arg0, string arg1)
         {
-            return WriteMessageWithResponseAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(Callback)), new DynamicArgumentTuple<int, string>(arg0, arg1));
+            return WriteMessageWithResponseTaskAsync<DynamicArgumentTuple<int, string>, int>(FNV1A32.GetHashCode(nameof(Callback)), new DynamicArgumentTuple<int, string>(arg0, arg1));
         }
     }
 }
@@ -191,7 +196,7 @@ public class HandCraftedStreamingHubClientTestHub : StreamingHubBase<IHandCrafte
     public async Task<int> Callback(int arg0, string arg1)
     {
         var group = await Group.AddAsync(Guid.NewGuid().ToString());
-        Broadcast(group).OnMessage(arg0, arg1);
+        group.All.OnMessage(arg0, arg1);
         return 123;
     }
 }
